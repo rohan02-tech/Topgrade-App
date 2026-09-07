@@ -12,4 +12,4 @@
   This file must be loaded BEFORE app.js and chat.js in index.html,
   since both of them use the API_BASE constant defined here.
 */
-const API_BASE = "http://127.0.0.1:5000";
+const API_BASE = "https://topgrade-backend-21mz.onrender.com";
