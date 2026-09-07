@@ -1,0 +1,6 @@
+[build]
+  publish = "."
+  command = ""
+
+# No build step needed - this is a plain HTML/JS/CSS site.
+# Netlify just serves the files in this folder as-is.

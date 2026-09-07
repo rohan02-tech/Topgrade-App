@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TOP GRADE</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  body { font-family: Arial, sans-serif; background: #f4f1ea; margin: 0; padding: 0; }
+  header { background: #0B1220; color: white; padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; }
+  header h1 { margin: 0; font-size: 20px; }
+  header span { color: #F5820D; }
+  header .login-link { color: #F5820D; font-size: 13px; cursor: pointer; border: 1px solid #F5820D; padding: 5px 10px; border-radius: 8px; }
+  .container { max-width: 480px; margin: 0 auto; padding: 16px; padding-bottom: 90px; }
+  .course-card {
+    background: white; border-radius: 12px; padding: 16px; margin-bottom: 14px;
+    border: 1px solid #e5e0d5;
+  }
+  .course-card h2 { margin: 0 0 4px; font-size: 17px; }
+  .course-card p.meta { color: #777; font-size: 13px; margin: 0 0 8px; }
+  .course-card p.price { color: #F5820D; font-weight: bold; margin: 0 0 8px; }
+  .course-card p.desc { color: #444; font-size: 13px; margin: 0 0 10px; line-height: 1.4; }
+  .lesson-list { font-size: 13px; color: #444; padding-left: 18px; margin: 6px 0; }
+  .btn {
+    background: #F5820D; color: white; border: none; padding: 8px 14px;
+    border-radius: 8px; font-size: 13px; cursor: pointer;
+  }
+  .btn.secondary { background: #0B1220; }
+  .btn.disabled { background: #ccc; cursor: not-allowed; }
+  .badge {
+    display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px;
+    background: #e6f5ee; color: #0f6e56; margin-left: 6px;
+  }
+  nav { display: flex; justify-content: space-around; background: white; border-top: 1px solid #e5e0d5;
+        position: fixed; bottom: 0; left: 0; right: 0; padding: 10px 0; }
+  nav div { font-size: 12px; color: #777; text-align: center; cursor: pointer; }
+  nav div.active { color: #F5820D; font-weight: bold; }
+
+  /* Login page */
+  .login-box {
+    background: white; border-radius: 14px; padding: 24px; margin-top: 40px;
+    border: 1px solid #e5e0d5; text-align: center;
+  }
+  .login-box h2 { margin-top: 0; color: #0B1220; }
+  .login-box input {
+    width: 100%; box-sizing: border-box; padding: 10px 12px; margin: 8px 0;
+    border-radius: 8px; border: 1px solid #ccc; font-size: 14px;
+  }
+  .login-box .btn { width: 100%; padding: 12px; font-size: 15px; margin-top: 8px; }
+  .login-hint { font-size: 12px; color: #999; margin-top: 10px; }
+  .error-text { color: #d33; font-size: 13px; margin-top: 6px; }
+
+  /* Chat widget */
+  #chatBubble {
+    position: fixed; bottom: 78px; right: 18px; width: 56px; height: 56px;
+    background: #F5820D; border-radius: 50%; display: flex; align-items: center;
+    justify-content: center; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+    font-size: 26px; color: white; z-index: 50; user-select: none;
+  }
+  #chatPanel {
+    position: fixed; bottom: 142px; right: 18px; width: 320px; max-width: calc(100vw - 36px);
+    height: 420px; max-height: calc(100vh - 200px); background: white; border-radius: 14px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.25); display: none; flex-direction: column;
+    overflow: hidden; z-index: 50; border: 1px solid #e5e0d5;
+  }
+  #chatPanel.open { display: flex; }
+  #chatHeader {
+    background: #0B1220; color: white; padding: 12px 14px; font-size: 14px;
+    font-weight: bold; display: flex; justify-content: space-between; align-items: center;
+  }
+  #chatHeader span { color: #F5820D; }
+  #chatClose { cursor: pointer; font-size: 16px; color: #ccc; }
+  #chatMessages {
+    flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px;
+    background: #f8f6f1;
+  }
+  .chat-msg { max-width: 80%; padding: 8px 12px; border-radius: 12px; font-size: 13px; line-height: 1.4; white-space: pre-wrap; }
+  .chat-msg.user { align-self: flex-end; background: #F5820D; color: white; border-bottom-right-radius: 3px; }
+  .chat-msg.bot { align-self: flex-start; background: white; color: #222; border: 1px solid #e5e0d5; border-bottom-left-radius: 3px; }
+  #chatInputRow { display: flex; border-top: 1px solid #e5e0d5; padding: 8px; gap: 6px; }
+  #chatInput {
+    flex: 1; border: 1px solid #ccc; border-radius: 20px; padding: 8px 14px;
+    font-size: 13px; outline: none;
+  }
+  #chatSend {
+    background: #F5820D; color: white; border: none; border-radius: 20px;
+    padding: 0 16px; font-size: 13px; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>TOP <span>GRADE</span></h1>
+  <div class="login-link" id="headerAction">Login</div>
+</header>
+
+<div class="container" id="app">
+  <p>Loading courses...</p>
+</div>
+
+<nav>
+  <div class="active" data-view="home">Home</div>
+  <div data-view="mylearning">My Learning</div>
+  <div data-view="notifications">Notifications</div>
+  <div data-view="profile">Profile</div>
+</nav>
+
+<div id="chatBubble">💬</div>
+<div id="chatPanel">
+  <div id="chatHeader">
+    <span>TOP GRADE</span>&nbsp;Assistant
+    <span id="chatClose">✕</span>
+  </div>
+  <div id="chatMessages"></div>
+  <div id="chatInputRow">
+    <input type="text" id="chatInput" placeholder="Ask about courses, pricing, enrollment...">
+    <button id="chatSend">Send</button>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script src="chat.js"></script>
+</body>
+</html>

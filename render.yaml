@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: topgrade-backend
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: "pip install -r requirements.txt && python database/seed.py"
+    startCommand: "gunicorn -w 4 -b 0.0.0.0:$PORT app:app"
+    envVars:
+      - key: ALLOWED_ORIGIN
+        value: "*"
+        # After your Netlify site is live, change this to your real frontend
+        # URL, e.g. https://topgrade.netlify.app, and redeploy.
