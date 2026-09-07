@@ -247,3 +247,4 @@ document.querySelectorAll("nav div").forEach(el => {
 
 // Initial load
 renderHome();
+

@@ -32,6 +32,15 @@ CORS(app, resources={r"/api/*": {"origins": ALLOWED_ORIGIN}, r"/media/*": {"orig
 DB_PATH = os.path.join(os.path.dirname(__file__), "database", "topgrade.db")
 MEDIA_DIR = os.path.join(os.path.dirname(__file__), "media")
 
+# Self-healing seed: if the database file doesn't exist yet (e.g. because a
+# hosting platform's build step wasn't configured to run seed.py), build it
+# automatically the first time the app starts, instead of silently 404-ing
+# on every route that queries it.
+if not os.path.exists(DB_PATH):
+    from database.seed import build_database
+    print("topgrade.db not found - seeding it now on startup...")
+    build_database()
+
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)
