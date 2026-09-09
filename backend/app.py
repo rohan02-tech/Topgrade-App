@@ -231,5 +231,17 @@ def chat():
     return jsonify({"reply": reply})
 
 
+@app.route("/api/chat/status", methods=["GET"])
+def chat_status():
+    """Expose safe chatbot configuration details for deployment checks."""
+    from chatbot import OPENAI_API_KEY, OPENAI_MODEL, _client
+
+    return jsonify({
+        "openai_key_configured": bool(OPENAI_API_KEY),
+        "openai_client_initialized": _client is not None,
+        "model": OPENAI_MODEL,
+    })
+
+
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
