@@ -1,50 +1,62 @@
 """
 chatbot.py
-Rule-based chatbot for the TOP GRADE app widget.
+TOP GRADE chat widget backend logic.
 
-This is intentionally NOT connected to an external AI API - it answers using
-your own course and enrollment data straight from topgrade.db, matched
-against simple keyword intents. That keeps it free to run, fast, and
-accurate about your actual catalog (no risk of it inventing course details).
+Uses the OpenAI ChatGPT API to generate natural, flexible replies, while
+keeping topgrade.db as the single source of truth for facts (prices, lesson
+counts, enrollment status, descriptions). We never let the model "know"
+facts on its own - every request rebuilds a fresh context string straight
+from the database and tells the model to only use that, and nothing else,
+for anything factual about TOP GRADE.
 
 HOW IT WORKS
 ------------
-get_bot_reply(student_id, message) is the single entry point.
-  - student_id: int or None. None means an unauthenticated/unidentified visitor.
-  - message: the raw text the user typed.
+get_bot_reply(student_id, message) is the single entry point, unchanged
+from before, so app.py does not need to change at all.
 
-It looks at the message, guesses an intent from keywords, pulls whatever it
-needs from the database (course list, a specific course, or a student's
-enrollment), and returns a plain-text reply string.
+  1. Pull live data from the DB: all courses + lessons, and (if student_id
+     is given) that student's name and enrollment status.
+  2. Build a system prompt containing that data as plain facts, plus
+     instructions on tone and what to do if asked something unrelated.
+  3. Send that + the user's message to the OpenAI Chat Completions API.
+  4. Return the model's reply text.
+
+FALLBACK BEHAVIOUR
+-------------------
+If OPENAI_API_KEY is not set, or the API call fails for any reason
+(network issue, quota exhausted, bad key), we fall back to the old
+rule-based keyword responder below so the chat widget never just breaks or
+shows an error to a student. This is a graceful degrade, not a crash.
 
 NO CHAT HISTORY (BY DESIGN, FOR NOW)
 ------------------------------------
-Every call is independent - the bot has no memory of earlier messages in the
-same conversation. This matches the current requirement.
+Every call is still independent - same as before. See the note in the
+old version of this file for how to add persistent history later; that
+upgrade path is unchanged by this rewrite.
 
-UPGRADE PATH: TO ADD HISTORY LATER
------------------------------------
-1. Add a table to schema.sql, e.g.:
-     CREATE TABLE chat_messages (
-         id INTEGER PRIMARY KEY AUTOINCREMENT,
-         student_id INTEGER,             -- nullable, for anonymous visitors
-         sender TEXT NOT NULL,            -- 'user' or 'bot'
-         message TEXT NOT NULL,
-         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-         FOREIGN KEY (student_id) REFERENCES students(id)
-     );
-2. In the /api/chat route in app.py, after computing `reply`, INSERT both the
-   user's message and the bot's reply into chat_messages.
-3. Add a GET /api/chat-history/<student_id> endpoint that returns past rows
-   ordered by created_at, and have the frontend load it when the widget opens.
-No changes to the intent-matching logic below would be needed - history is
-purely an additive, storage-layer change.
+SETUP
+-----
+Set the OPENAI_API_KEY environment variable (locally in a .env / shell
+export, and on Render under the backend service's Environment tab).
+Nothing else in the codebase needs to change once that variable is set.
 """
 
 import sqlite3
 import os
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "database", "topgrade.db")
+
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")  # cheap, fast, good enough for a support bot
+
+_client = None
+if OPENAI_API_KEY:
+    try:
+        from openai import OpenAI
+        _client = OpenAI(api_key=OPENAI_API_KEY)
+    except Exception as e:
+        print(f"[chatbot] Could not initialise OpenAI client, will use fallback only: {e}")
+        _client = None
 
 
 def _get_db():
@@ -83,100 +95,170 @@ def _is_enrolled(conn, student_id, course_id):
     if student_id is None:
         return False
     row = conn.execute(
-        "SELECT 1 FROM enrollments WHERE student_id = ? AND course_id = ? AND status = 'approved'",
+        "SELECT 1 FROM enrollments WHERE student_id = ? AND course_id = ? AND status = 'active'",
         (student_id, course_id),
     ).fetchone()
     return row is not None
 
 
-def get_bot_reply(student_id, message):
-    """Main entry point. Returns a plain-text reply string."""
-    if not message or not message.strip():
-        return "I didn't catch that - could you type your question?"
+def _get_enrolled_courses(conn, student_id):
+    if student_id is None:
+        return []
+    rows = conn.execute(
+        """SELECT c.* FROM courses c
+           JOIN enrollments e ON e.course_id = c.id
+           WHERE e.student_id = ? AND e.status = 'active'""",
+        (student_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
 
+
+# ---------------------------------------------------------------------------
+# Context building for the LLM
+# ---------------------------------------------------------------------------
+
+def _build_context(conn, student_id):
+    """Builds a plain-text block of live facts to ground the model's reply."""
+    courses = _get_all_courses(conn)
+    student = _get_student(conn, student_id)
+    enrolled_courses = _get_enrolled_courses(conn, student_id) if student else []
+    enrolled_ids = {c["id"] for c in enrolled_courses}
+
+    lines = []
+    lines.append("TOP GRADE course catalog (this is the full and only catalog, do not mention any other courses):")
+    for c in courses:
+        lines.append(
+            f"- {c['title']} | category: {c['category']} | price: Rs. {c['price']} | "
+            f"duration: {c['duration']} | students enrolled: {c['students_enrolled']} | "
+            f"lessons available so far: {len(c['lessons'])}"
+        )
+        for l in c["lessons"]:
+            lines.append(f"    Lesson {l['lesson_number']}: {l['title']} ({l['duration']})")
+        lines.append(f"    Description: {c['description']}")
+
+    lines.append("")
+    if student:
+        lines.append(f"The person chatting is a logged-in student named {student['name']}.")
+        if enrolled_courses:
+            titles = ", ".join(c["title"] for c in enrolled_courses)
+            lines.append(f"They are currently enrolled in: {titles}.")
+        else:
+            lines.append("They are not currently enrolled in any course.")
+    else:
+        lines.append("The person chatting is an anonymous visitor who is not logged in.")
+
+    lines.append("")
+    lines.append("TOP GRADE company facts: tagline 'Learn Today, Lead Tomorrow'. "
+                  "Support contact: support@topgradeinnovations.com. Website: www.topgradeinnovation.com. "
+                  "TOP GRADE is MSME, MCA, and ISO 9001 approved.")
+
+    return "\n".join(lines)
+
+
+SYSTEM_PROMPT_TEMPLATE = """You are the TOP GRADE support and course assistant chat widget, embedded in the TOP GRADE learning app.
+
+Be warm, concise, and helpful, like a friendly course advisor. Keep replies short - a few sentences at most, this is a chat widget, not an essay. Do not use markdown formatting, tables or bullet symbols; write in plain conversational sentences since this is rendered as plain text in a chat bubble.
+
+Only state facts about TOP GRADE, its courses, prices, lessons, or the student's enrollment using the information given below. Never invent a course, price, lesson, or company detail that is not listed. If someone asks something about TOP GRADE that is not covered in the facts below, say you're not sure and suggest they contact support at support@topgradeinnovations.com.
+
+You CAN and SHOULD chat naturally and helpfully about general topics unrelated to TOP GRADE too (e.g. study tips, explaining a programming concept, motivation, general questions) - the goal is to be a genuinely useful assistant for students, not just a rigid course FAQ bot.
+
+Here are the current live facts about TOP GRADE:
+
+{context}
+"""
+
+
+# ---------------------------------------------------------------------------
+# LLM-backed reply
+# ---------------------------------------------------------------------------
+
+def _get_llm_reply(student_id, message):
+    if _client is None:
+        return None
+
+    conn = _get_db()
+    try:
+        context = _build_context(conn, student_id)
+    finally:
+        conn.close()
+
+    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(context=context)
+
+    try:
+        response = _client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": message},
+            ],
+            max_tokens=300,
+            temperature=0.6,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"[chatbot] OpenAI call failed, falling back to rule-based reply: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Rule-based fallback (used if no API key set, or the API call fails)
+# ---------------------------------------------------------------------------
+
+def _get_rule_based_reply(student_id, message):
     text = message.lower().strip()
     conn = _get_db()
     try:
         courses = _get_all_courses(conn)
         student = _get_student(conn, student_id)
-        mentioned_course = _find_course_by_name(courses, text)
 
-        # ---- Greeting ----
-        if any(w in text for w in ["hi", "hello", "hey"]) and len(text) < 20:
+        if any(g in text for g in ["hi", "hello", "hey"]):
             name = f", {student['name']}" if student else ""
-            return (
-                f"Hey there{name}! I'm the TOP GRADE assistant. "
-                f"You can ask me about our courses, lessons, pricing, or your enrollment status."
-            )
+            return f"Hi there{name}! I'm the TOP GRADE assistant. Ask me about our courses, pricing, or your enrollment."
 
-        # ---- Enrollment status: "am I enrolled", "my courses", "my learning" ----
-        if any(p in text for p in ["am i enrolled", "my course", "my learning", "what am i taking", "my enrollment"]):
-            if student is None:
-                return (
-                    "I can't tell yet who you are - please log in first, "
-                    "then ask me again and I'll pull up your enrolled courses."
-                )
-            enrolled = [c for c in courses if _is_enrolled(conn, student_id, c["id"])]
-            if not enrolled:
-                return (
-                    f"You're not enrolled in anything yet, {student['name']}. "
-                    f"Want me to tell you about our Python or Java course?"
-                )
-            titles = ", ".join(c["title"] for c in enrolled)
-            return f"You're enrolled in: {titles}. Tap 'My Learning' below to jump into your lessons."
+        if "enrolled" in text or "my course" in text:
+            if not student:
+                return "You're not logged in yet, so I can't check your enrollment. Please log in first."
+            enrolled = _get_enrolled_courses(conn, student_id)
+            if enrolled:
+                titles = ", ".join(c["title"] for c in enrolled)
+                return f"You're enrolled in: {titles}."
+            return "You're not enrolled in any course yet. Head to the home page to enroll."
 
-        # ---- How to enroll / enrollment action ----
-        if any(p in text for p in ["how do i enroll", "how to enroll", "want to enroll", "sign up", "join course"]):
-            if mentioned_course:
-                if student and _is_enrolled(conn, student_id, mentioned_course["id"]):
-                    return f"Good news - you're already enrolled in {mentioned_course['title']}!"
-                return (
-                    f"To enroll in {mentioned_course['title']}, open the course card on the Home page "
-                    f"and tap 'Enroll Now'. It's {mentioned_course['price']} rupees for {mentioned_course['duration']}."
-                )
-            return (
-                "Open the Home page, find the course you're interested in, and tap 'Enroll Now' on its card. "
-                "If you're not logged in yet, you'll be asked to log in first."
-            )
+        if "how" in text and "enroll" in text:
+            return "Just open a course from the home page and tap Enroll. It's instant, no payment needed in this demo."
 
-        # ---- Lesson count / lecture details for a specific course ----
-        if mentioned_course and any(p in text for p in ["lecture", "lesson", "how many", "video", "content", "syllabus", "topic"]):
-            lesson_lines = "\n".join(
-                f"- {l['title']} ({l['duration']})" for l in mentioned_course["lessons"]
-            )
-            return (
-                f"{mentioned_course['title']} currently has {len(mentioned_course['lessons'])} lecture(s):\n"
-                f"{lesson_lines}\n\n{mentioned_course['description']}"
-            )
+        course = _find_course_by_name(courses, text)
+        if course and ("lesson" in text or "lecture" in text):
+            return f"{course['title']} currently has {len(course['lessons'])} lessons available."
 
-        # ---- Pricing ----
-        if any(p in text for p in ["price", "cost", "fee", "how much"]):
-            if mentioned_course:
-                return f"{mentioned_course['title']} costs {mentioned_course['price']} rupees for {mentioned_course['duration']}."
-            lines = "\n".join(f"- {c['title']}: {c['price']} rupees ({c['duration']})" for c in courses)
-            return f"Here's our current pricing:\n{lines}"
+        if "price" in text or "cost" in text or "fee" in text:
+            if course:
+                return f"{course['title']} costs Rs. {course['price']} for {course['duration']}."
+            parts = [f"{c['title']}: Rs. {c['price']}" for c in courses]
+            return "Here's our pricing: " + "; ".join(parts) + "."
 
-        # ---- Course details / description ----
-        if mentioned_course:
-            return f"{mentioned_course['title']}: {mentioned_course['description']}"
+        if course:
+            return f"{course['title']}: {course['description']}"
 
-        # ---- Course discovery: "what courses", "courses available" ----
-        if any(p in text for p in ["what course", "which course", "courses do you have", "courses available", "course list"]):
+        if "course" in text:
             titles = ", ".join(c["title"] for c in courses)
-            return f"We currently offer: {titles}. Ask me about either one for details, lessons, or pricing."
+            return f"We currently offer: {titles}. Ask me about either one for more details."
 
-        # ---- Support / contact / escalation ----
-        if any(p in text for p in ["support", "help", "contact", "human", "agent", "complaint"]):
-            return (
-                "I can help with course info, enrollment, and pricing questions right here. "
-                "For anything else, reach our support team at support@topgradeinnovations.com."
-            )
+        if "support" in text or "help" in text or "contact" in text:
+            return "You can reach our support team at support@topgradeinnovations.com."
 
-        # ---- Fallback ----
-        return (
-            "I'm not sure I understood that. Try asking things like "
-            "\"What courses do you have?\", \"How many lectures in Python?\", "
-            "\"What's the price of Java?\", or \"Am I enrolled?\""
-        )
+        return "I'm not totally sure about that. You can ask me about our courses, pricing, lessons, or your enrollment, or contact support@topgradeinnovations.com."
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Public entry point (unchanged signature - app.py needs no changes)
+# ---------------------------------------------------------------------------
+
+def get_bot_reply(student_id, message):
+    reply = _get_llm_reply(student_id, message)
+    if reply:
+        return reply
+    return _get_rule_based_reply(student_id, message)

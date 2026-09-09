@@ -19,6 +19,9 @@ from flask_cors import CORS
 import sqlite3
 import os
 
+from dotenv import load_dotenv
+load_dotenv()  # loads backend/.env locally so OPENAI_API_KEY is available; harmless no-op on Render
+
 from chatbot import get_bot_reply
 
 app = Flask(__name__)

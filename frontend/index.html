@@ -4,6 +4,17 @@
 <meta charset="UTF-8">
 <title>TOP GRADE</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<!-- PWA: makes the app installable on Android/Chrome -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0B1220">
+
+<!-- PWA: iOS-specific tags so "Add to Home Screen" from Safari works and looks right -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="TOP GRADE">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
 <style>
   body { font-family: Arial, sans-serif; background: #f4f1ea; margin: 0; padding: 0; }
   header { background: #0B1220; color: white; padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; }
@@ -121,5 +132,17 @@
 <script src="config.js"></script>
 <script src="app.js"></script>
 <script src="chat.js"></script>
+<script>
+  // PWA: register the service worker so the app is installable and loads
+  // instantly on repeat visits. Fails silently and harmlessly on browsers
+  // that don't support it (the site just works as a normal webpage there).
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("service-worker.js").catch((err) => {
+        console.warn("Service worker registration failed:", err);
+      });
+    });
+  }
+</script>
 </body>
 </html>
